@@ -1,0 +1,56 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    # 每天 UTC 02:17（北京时间 10:17）自动同步一次
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+    inputs:
+      strategy:
+        description: '同步策略'
+        required: true
+        default: 'merge'
+        type: choice
+        options:
+          - merge
+          - hard
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      UPSTREAM_REPO: https://github.com/w1249178256/xyzw_web_helper.git
+      UPSTREAM_BRANCH: main
+      STRATEGY: ${{ github.event.inputs.strategy || 'merge' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Sync from upstream
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream "$UPSTREAM_REPO" 2>/dev/null || true
+          git fetch upstream "$UPSTREAM_BRANCH" --tags --force
+
+          if [ "$STRATEGY" = "hard" ]; then
+            echo "::warning::hard 模式：强制对齐上游，fork 上的独有提交会被丢弃"
+            git reset --hard "upstream/$UPSTREAM_BRANCH"
+            git push --force-with-lease origin "HEAD:$UPSTREAM_BRANCH"
+          else
+            git merge "upstream/$UPSTREAM_BRANCH" --no-edit
+            git push origin "HEAD:$UPSTREAM_BRANCH"
+          fi
+
+      - name: Report
+        if: always()
+        run: |
+          echo "sync strategy: $STRATEGY"
+          git log -1 --format='fork HEAD now: %h %s'
