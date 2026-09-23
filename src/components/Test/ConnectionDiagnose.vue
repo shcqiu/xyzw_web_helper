@@ -2,12 +2,13 @@
   <div class="diagnose">
     <n-card title="一键诊断：为什么一连命令就断" class="mb-4">
       <n-alert type="info" :show-icon="true" class="mb-4">
-        选一个角色，点「一键诊断」。页面会自动连上游戏服务器、发一条命令，并把
+        选一个角色，点「一键诊断」。页面会自动连上游戏服务器、用你选的
+        <b>clientVersion</b> 发一条「获取角色信息」，并把
         <b>连接关闭码（code）</b> 和 <b>服务器返回的错误码</b> 用中文显示出来。
-        你不用开 F12、不用看控制台，把页面最下面的「结论」发给我截图即可。
+        你不用开 F12，把页面最下面的「结论」发我截图即可。
       </n-alert>
 
-      <n-space align="center">
+      <n-space align="center" :wrap="true">
         <n-form-item label="选择角色" class="role-form">
           <n-select
             v-model:value="selectedRoleId"
@@ -16,6 +17,25 @@
             style="width: 260px"
           />
         </n-form-item>
+        <n-form-item label="clientVersion" class="ver-form">
+          <n-radio-group v-model:value="versionMode">
+            <n-space>
+              <n-radio value="old">旧版 2.21.2</n-radio>
+              <n-radio value="new">新版 2.43.4</n-radio>
+              <n-radio value="custom">自定义</n-radio>
+            </n-space>
+          </n-radio-group>
+        </n-form-item>
+      </n-space>
+
+      <n-input
+        v-if="versionMode === 'custom'"
+        v-model:value="customVersion"
+        placeholder="粘贴要测试的 clientVersion，例如 2.43.4-a7db1319a3025acb-wx"
+        class="mb-3"
+      />
+
+      <n-space align="center">
         <n-button
           type="primary"
           :loading="running"
@@ -24,6 +44,9 @@
         >
           一键诊断
         </n-button>
+        <n-text depth="3" class="hint">
+          提示：先点「旧版」试一次，再点「新版」试一次，对比结论即可定位是不是版本问题。
+        </n-text>
       </n-space>
 
       <!-- 时间线 -->
@@ -68,12 +91,25 @@ import { g_utils } from "@/utils/bonProtocol.js";
 const message = useMessage();
 const tokenStore = useTokenStore();
 
+const OLD_VER = "2.21.2-fa918e1997301834-wx";
+const NEW_VER = "2.43.4-a7db1319a3025acb-wx";
+
 const selectedRoleId = ref(null);
 const running = ref(false);
 const steps = ref([]);
 const closeInfo = ref(null); // { code, reason }
 const firstMsg = ref(null); // { cmd, code }
 const messagesSeen = ref(0);
+const roleTest = ref(null); // { status: 'ok'|'error', code?, desc?, name? }
+
+const versionMode = ref("old"); // 'old' | 'new' | 'custom'
+const customVersion = ref("");
+
+const chosenVersion = computed(() => {
+  if (versionMode.value === "new") return NEW_VER;
+  if (versionMode.value === "custom") return customVersion.value.trim() || OLD_VER;
+  return OLD_VER;
+});
 
 const verdict = ref("");
 const verdictTitle = ref("");
@@ -97,6 +133,7 @@ const reset = () => {
   closeInfo.value = null;
   firstMsg.value = null;
   messagesSeen.value = 0;
+  roleTest.value = null;
   verdict.value = "";
   verdictTitle.value = "";
   verdictStatus.value = "info";
@@ -114,8 +151,7 @@ const errorCodeMap = {
 const readFrame = (data) => {
   try {
     if (typeof data === "string") return JSON.parse(data);
-    if (data instanceof ArrayBuffer)
-      return g_utils.parse(data, "auto");
+    if (data instanceof ArrayBuffer) return g_utils.parse(data, "auto");
     return null;
   } catch {
     return null;
@@ -137,9 +173,12 @@ const diagnose = async () => {
     return;
   }
 
-  pushStep("info", "开始连接", "正在建立 WebSocket 连接…");
+  pushStep(
+    "info",
+    "开始连接",
+    `正在建立 WebSocket 连接…（测试 clientVersion: ${chosenVersion.value}）`,
+  );
 
-  // 用 store 建立连接（内部会解析 token、构造 wsUrl、连上后自动发 role_getroleinfo）
   tokenStore.createWebSocketConnection(
     selectedRoleId.value,
     token.token,
@@ -147,7 +186,7 @@ const diagnose = async () => {
   );
 
   // 等一拍，确保 client 已创建
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise((r) => setTimeout(r, 400));
 
   const conn = tokenStore.wsConnections[selectedRoleId.value];
   const client = conn?.client;
@@ -161,6 +200,7 @@ const diagnose = async () => {
 
   const onOpen = () => {
     pushStep("success", "已连接", "WebSocket 握手成功（token 有效）");
+    runRoleTest(client);
   };
   const onMessage = (evt) => {
     messagesSeen.value += 1;
@@ -169,7 +209,9 @@ const diagnose = async () => {
     const code = pkt?.code;
     if (!firstMsg.value) {
       firstMsg.value = { cmd, code };
-      const desc = code ? errorCodeMap[code] || `业务码 ${code}` : "成功(无错误码)";
+      const desc = code
+        ? errorCodeMap[code] || `业务码 ${code}`
+        : "成功(无错误码)";
       pushStep(
         "success",
         "收到服务器首条消息",
@@ -179,7 +221,9 @@ const diagnose = async () => {
   };
   const onClose = (evt) => {
     closeInfo.value = { code: evt.code, reason: evt.reason || "" };
-    const reasonText = evt.reason ? `（原因: ${evt.reason}）` : "（无原因文本）";
+    const reasonText = evt.reason
+      ? `（原因: ${evt.reason}）`
+      : "（无原因文本）";
     let type = "error";
     if (evt.code === 1000) type = "warning";
     pushStep(type, `连接被关闭 code=${evt.code}`, reasonText);
@@ -191,28 +235,115 @@ const diagnose = async () => {
   socket.addEventListener("message", onMessage);
   socket.addEventListener("close", onClose);
 
-  // 兜底：6 秒还没关闭也没消息，给个超时结论
+  // 兜底：8 秒还没结论，给个超时提示
   setTimeout(() => {
-    if (running.value && !closeInfo.value) {
+    if (running.value && !closeInfo.value && !roleTest.value) {
       pushStep(
         "warning",
         "超时未关闭",
-        "连接保持中，未观察到自动断开。可手动点断开看结果。",
+        "连接保持中，但 8 秒内未收到角色信息响应也未断开。可手动断开看结果。",
       );
       running.value = false;
     }
-  }, 6000);
+  }, 8000);
+};
+
+const runRoleTest = async (client) => {
+  // 等 store 自动发的 role_getroleinfo 先出去，再发我们带版本的测试
+  await new Promise((r) => setTimeout(r, 600));
+  if (!client) return;
+
+  pushStep(
+    "info",
+    "发送 role_getroleinfo",
+    `携带 clientVersion: ${chosenVersion.value}`,
+  );
+
+  try {
+    const res = await client.getRoleInfo({ clientVersion: chosenVersion.value });
+    const name =
+      res?.name ||
+      res?.roleName ||
+      res?.nickName ||
+      (res?.role && res.role.name) ||
+      null;
+    roleTest.value = { status: "ok", name };
+    pushStep(
+      "success",
+      "角色信息成功返回",
+      name ? `角色: ${name}` : "拿到了角色数据（无名称字段）",
+    );
+  } catch (e) {
+    const m = e?.message || String(e);
+    const mm = m.match(/(\d{4,})/);
+    const code = mm ? mm[1] : null;
+    roleTest.value = { status: "error", code, desc: m };
+    pushStep("error", "角色信息失败", m);
+  }
+  finish();
 };
 
 const finish = () => {
+  // 关键证据（关闭码 或 角色测试结果）齐了再给结论
+  if (!closeInfo.value && !roleTest.value) return;
   running.value = false;
+
   const code = closeInfo.value?.code;
   const reason = closeInfo.value?.reason || "";
 
-  if (code === undefined) {
-    verdictTitle.value = "无法判定";
-    verdictStatus.value = "info";
-    verdict.value = "诊断过程中没有捕获到连接关闭事件，请重试。";
+  // 1. 角色信息成功 → 连接完全正常
+  if (roleTest.value?.status === "ok") {
+    verdictTitle.value = "连接正常 ✓";
+    verdictStatus.value = "success";
+    verdict.value =
+      `用 clientVersion「${chosenVersion.value}」成功拿到角色信息，说明 token 与连接都正常。\n` +
+      `你之前遇到的 200020 / 已断开，不是版本或部署问题，而是：\n` +
+      `① 该账号在手机游戏或其他设备在线，把网页连接挤掉；或\n` +
+      `② 某些活动/功能当前不在开放时间。\n` +
+      `👉 请彻底关闭手机上的咸鱼之王，只留一个 ctt.ccwu.cc 标签页，再点一次。若仍断，把结论发我。`;
+    return;
+  }
+
+  // 2. 角色信息失败，带了业务码
+  if (roleTest.value?.status === "error") {
+    const c = roleTest.value.code;
+    if (versionMode.value === "old" && c) {
+      verdictTitle.value = "疑似 clientVersion 过期";
+      verdictStatus.value = "warning";
+      verdict.value =
+        `角色信息查询返回业务码 ${c}（${errorCodeMap[c] || "未知"}）。\n` +
+        `当前测的是旧版 ${OLD_VER}。请上方切到「新版 2.43.4」再点一次诊断：\n` +
+        `· 若新版成功 → 确认是版本问题，我直接把代码改成新版推你 fork；\n` +
+        `· 若新版也报同样的码或被 1005 踢 → 不是版本问题，是会话被占（关手机游戏）。`;
+      return;
+    }
+    if (versionMode.value === "new" && c) {
+      verdictTitle.value = "新版也失败";
+      verdictStatus.value = "error";
+      verdict.value =
+        `即使用最新 clientVersion ${NEW_VER}，角色信息仍返回 ${c} 或连接被关。说明不是版本号问题，而是服务器在拒绝这条会话。\n` +
+        `最可能：该账号在手机游戏/其他设备在线，游戏只允许一条连接。\n` +
+        `👉 请彻底关闭手机咸鱼之王，再点一次（旧版/新版都行）。`;
+      return;
+    }
+    // 自定义版本
+    verdictTitle.value = `角色信息失败（码 ${c || "无"}）`;
+    verdictStatus.value = "error";
+    verdict.value =
+      `用自定义版本「${chosenVersion.value}」仍失败：${roleTest.value.desc}\n` +
+      `可再试「旧版」和「新版」对比。若都失败，基本确定是会话被占（关手机游戏）或游戏方封禁。`;
+    return;
+  }
+
+  // 3. 没拿到角色信息，只有关闭码
+  if (code === 1005 || code === 1006) {
+    verdictTitle.value = "服务器直接踢连接（最可能：同号互踢）";
+    verdictStatus.value = "error";
+    verdict.value =
+      `连接建立后服务器直接以 ${code} 关闭，且没返回任何角色数据。\n` +
+      `这说明服务器在握手后立刻拒掉了这条连接。最常见原因：该账号在别处（手机游戏 / 其他浏览器标签页 / 其他设备）已经在线，游戏服务器只允许一条会话，新连接被挤掉。\n` +
+      `👉 请：① 彻底关闭手机上的咸鱼之王（杀后台）；② 只开一个 ctt.ccwu.cc 标签页；③ 重新点「一键诊断」（可试「新版」clientVersion）。\n` +
+      `若关掉手机游戏仍 1005，那就是游戏方对第三方工具做了连接层封禁，纯前端改不了。`;
     return;
   }
 
@@ -220,42 +351,15 @@ const finish = () => {
     verdictTitle.value = "前端主动断开";
     verdictStatus.value = "warning";
     verdict.value =
-      `关闭码 1000（正常关闭），原因是「${reason || "未知"}」。这通常是页面或调度逻辑自己关的，不是游戏服务器踢的。请把 reason 文字发我，小二继续查。`;
+      `关闭码 1000（正常关闭），原因是「${reason || "未知"}」。通常是页面或调度逻辑自己关的，不是游戏服务器踢的。请把 reason 文字发我，小二继续查。`;
     return;
   }
 
-  // code 1006 = 异常断开，服务器/网络层直接断
-  if (code === 1006) {
-    if (firstMsg.value && firstMsg.value.code && firstMsg.value.code !== 0) {
-      verdictTitle.value = "服务器返回业务错误后断开";
-      verdictStatus.value = "error";
-      const desc =
-        errorCodeMap[firstMsg.value.code] || `业务码 ${firstMsg.value.code}`;
-      verdict.value =
-        `连接建立后，服务器先回了「${firstMsg.value.cmd} 错误码 ${firstMsg.value.code}（${desc}）」，随后以 1006 断开。\n` +
-        `这说明包能被服务器解析（编解码没问题），但这次会话被拒绝了。最常见原因是：该账号在别处（手机游戏 / 其他浏览器标签页 / 其他设备）已经在线，把这条连接挤掉了；也可能是 token 导入方式生成的会话被游戏端占用。\n` +
-        `👉 请先把手机上的咸鱼之王彻底关掉，并只保留一个 ctt.ccwu.cc 的浏览器标签页，再点一次「一键诊断」。`;
-    } else {
-      verdictTitle.value = "服务器直接踢连接（最可能：同号互踢）";
-      verdictStatus.value = "error";
-      verdict.value =
-        `关闭码 1006、无原因文本 —— 服务器在收到第一条命令后直接把连接RST掉了。\n` +
-        `最可能是：这个账号在别处已经在线（手机游戏、其他标签页、其他设备），游戏服务器只允许一条会话，新连接一发包就被判定冲突而踢掉。\n` +
-        `👉 请：① 彻底关闭手机上的咸鱼之王（杀后台）；② 只开一个 ctt.ccwu.cc 标签页；③ 重新点「一键诊断」。\n` +
-        `如果关掉手机游戏和一个标签页后还断，那就不是互踢，请把这次的「诊断过程」发我，小二再查协议/版本号。`;
-    }
-    return;
-  }
-
-  // 其他关闭码
   verdictTitle.value = `连接被关闭 code=${code}`;
   verdictStatus.value = "error";
   verdict.value =
     `关闭码 ${code}，原因「${reason || "无"}」。\n` +
-    (firstMsg.value
-      ? `连接期间首条消息: ${firstMsg.value.cmd} 返回码 ${firstMsg.value.code ?? "无"}。`
-      : "连接期间没有收到任何服务器消息。") +
-    `\n把这段发我，小二据此判断。`;
+    `连接期间没有收到角色信息。把这段发我，小二据此判断。`;
 };
 
 const copyVerdict = () => {
@@ -286,7 +390,16 @@ onUnmounted(() => {
 .role-form {
   margin-bottom: 0;
 }
+.ver-form {
+  margin-bottom: 0;
+}
+.hint {
+  max-width: 360px;
+}
 .mt-4 {
   margin-top: 16px;
+}
+.mb-3 {
+  margin-bottom: 12px;
 }
 </style>
