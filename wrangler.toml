@@ -1,6 +1,9 @@
 name = "xyzw-web-helper"
 compatibility_date = "2023-12-01"
 
-[pages_build_config]
-build_command = "npm run build"
-destination_dir = "dist"
+# Cloudflare Pages (Git integration) reads this instead of the removed
+# [pages_build_config] table (unsupported since wrangler 4).
+# Build/output settings configured on the Pages project itself:
+#   Build command          : npm run build
+#   Build output directory : dist
+pages_build_output_dir = "dist"
