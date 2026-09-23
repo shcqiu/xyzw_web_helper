@@ -143,6 +143,15 @@ const my_routes = [
       requiresToken: true
     }
   },
+  {
+    path: '/diagnose',
+    name: 'ConnectionDiagnose',
+    component: () => import('@/components/Test/ConnectionDiagnose.vue'),
+    meta: {
+      title: '连接诊断',
+      requiresToken: true
+    }
+  },
   // 兼容旧路由，重定向到新的token管理页面
   {
     path: '/login',
