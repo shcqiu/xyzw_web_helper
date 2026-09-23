@@ -160,7 +160,14 @@ const readFrame = (data) => {
 };
 
 // 一次发送的命令列表（都选「有响应映射」的只读命令，避免误判超时）
+// 顺序按官方客户端启动顺序：先版本协商(system_getdatabundlever)再查角色(role_getroleinfo)
 const TESTS = [
+  {
+    key: "databundle",
+    cmd: "system_getdatabundlever",
+    label: "数据包版本",
+    make: () => ({ isAudit: false }),
+  },
   {
     key: "role",
     cmd: "role_getroleinfo",
@@ -168,12 +175,6 @@ const TESTS = [
     make: () => ({ clientVersion: chosenVersion.value }),
   },
   { key: "activity", cmd: "activity_get", label: "活动", make: () => ({}) },
-  {
-    key: "databundle",
-    cmd: "system_getdatabundlever",
-    label: "数据包版本",
-    make: () => ({ isAudit: false }),
-  },
   { key: "tower", cmd: "tower_getinfo", label: "爬塔信息", make: () => ({}) },
 ];
 
@@ -294,6 +295,37 @@ const runTests = async (client) => {
       pushStep("error", `${t.label}失败`, m);
     }
   }
+
+  // 子测试：若 role 失败，等其他命令成功后重试一次，看是否被「前置命令」解锁
+  if (results.value.role?.status === "error") {
+    pushStep(
+      "info",
+      "重试 角色信息",
+      "role 之前失败，等其它命令跑完后再查一次，验证是否被前置命令解锁",
+    );
+    try {
+      const res = await client.sendWithPromise(
+        "role_getroleinfo",
+        { clientVersion: chosenVersion.value },
+        6000,
+      );
+      results.value.role2 = {
+        status: "ok",
+        code: 0,
+        desc: res?.name || res?.roleName || "成功",
+      };
+      pushStep("success", "重试 角色信息成功", results.value.role2.desc);
+    } catch (e) {
+      const m = e?.message || String(e);
+      results.value.role2 = {
+        status: "error",
+        code: (m.match(/(\d{4,})/) || [])[1] || null,
+        desc: m,
+      };
+      pushStep("error", "重试 角色信息仍失败", m);
+    }
+  }
+
   finish();
 };
 
@@ -344,12 +376,21 @@ const finish = () => {
       .filter(([, v]) => v.status === "ok")
       .map(([k]) => k)
       .join(" / ");
+    const role2Ok = r.role2?.status === "ok";
     verdictTitle.value = "选择性拒绝（会话是通的）";
     verdictStatus.value = "warning";
-    verdict.value =
-      `部分命令成功（${okList}），但 role_getroleinfo / tower 被拒（${r.role?.code || r.tower?.code}）。\n` +
-      `说明会话本身通，只是「角色信息 / 爬塔」这类命令被服务器拒——可能是需要前置握手（进入游戏/选服）或参数变了。\n` +
-      `把结论发我，我查连接初始化是否缺步骤。`;
+    if (role2Ok) {
+      verdict.value =
+        `首次 role_getroleinfo 被拒（${r.role?.code}），但等其它命令跑完后再查一次就成功了。\n` +
+        `这说明角色信息命令有「前置依赖」：必须先发 system_getdatabundlever 等引导命令完成版本协商，服务器才受理角色查询。\n` +
+        `→ 这是可修复的：把初始化顺序改成「先 system_getdatabundlever，再 role_getroleinfo」，小二直接改代码推你 fork。`;
+    } else {
+      verdict.value =
+        `部分命令成功（${okList}），但 role_getroleinfo / system_getdatabundlever 被拒（${r.role?.code || r.databundle?.code}），且重试仍失败。\n` +
+        `这两类恰好是官方客户端启动时的「引导握手」命令（版本协商 + 加载角色）。普通查询（活动/爬塔）正常。\n` +
+        `最可能：游戏方对该 agent 接口已不再受理这两条引导命令（返回 200020），属服务器端变化，纯前端无法绕过。\n` +
+        `→ 把结论发我；小二会改代码让初始化对 200020 静默降级（不再报红、不再中断批任务），能用的功能照常跑。`;
+    }
     return;
   }
 
