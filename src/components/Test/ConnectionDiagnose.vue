@@ -191,12 +191,10 @@ const diagnose = async () => {
     running.value = false;
     return;
   }
-  const wsUrl = token.wsUrl;
-  if (!wsUrl) {
-    message.error("该角色没有 wsUrl，请重新导入 token（扫码时勾选保存 wsUrl）");
-    running.value = false;
-    return;
-  }
+  // wsUrl 是可选的：没存就用默认游戏网关（与 tokenStore.createWebSocketConnection 的兜底一致）
+  const wsUrl =
+    token.wsUrl ||
+    `wss://xxz-xyzw.hortorgames.com/agent?p=${encodeURIComponent(token.token)}&e=x&lang=chinese`;
 
   pushStep(
     "info",
