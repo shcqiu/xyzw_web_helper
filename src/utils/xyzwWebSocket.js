@@ -160,6 +160,7 @@ export function registerDefaultCommands(reg) {
     .register("system_signinreward")
     .register("system_mysharecallback", { isSkipShareCard: true, type: 2 })
     .register("system_custom", { key: "", value: 0 })
+    .register("system_claimcdkreward", { key: "", platformType: "h5" })
 
     // 任务相关
     .register("task_claimdailypoint", { taskId: 1 })
@@ -192,6 +193,12 @@ export function registerDefaultCommands(reg) {
     .register("store_buy", { goodsId: 1 })
     .register("store_purchase", { goodsId: 1 })
     .register("store_refresh", { storeId: 1 })
+    .register("store_getpurchase")
+    .register("store_setpurchase", {
+      purchaseCnt: 1,
+      purchaseItemList: [],
+    })
+    .register("store_getpurchasehistory")
 
     // 军团
     .register("legion_getinfo")
@@ -209,6 +216,7 @@ export function registerDefaultCommands(reg) {
     .register("legion_resetresearch")
 
     .register("legion_getinfobyid")
+    .register("legion_applyjoin", { legionId: 0 })
     .register("legion_getarearank")
     .register("saltroad_getsaltroadwartotalrank")
     .register("legionwar_getgoldmonthwarrank")
@@ -1114,6 +1122,9 @@ export class XyzwWebSocketClient {
       presetteam_getinforesp: "presetteam_getinfo",
       mail_claimallattachmentresp: "mail_claimallattachment",
       store_buyresp: "store_purchase",
+      store_getpurchaseresp: "store_getpurchase",
+      store_setpurchaseresp: "store_setpurchase",
+      store_getpurchasehistoryresp: "store_getpurchasehistory",
       system_getdatabundleverresp: "system_getdatabundlever",
       tower_claimrewardresp: "tower_claimreward",
       fight_starttowerresp: "fight_starttower",
@@ -1140,6 +1151,7 @@ export class XyzwWebSocketClient {
       warguess_getguesscoinrewardresp: "warguess_getguesscoinreward",
       league_getbattlefieldresp: "league_getbattlefield",
       league_getgroupopponentresp: "league_getgroupopponent",
+      legion_applyjoinresp: "legion_applyjoin",
       legion_signupresp: "legion_signup",
       legion_payloadsignupresp: "legion_payloadsignup",
       legionmatch_rolesignupresp: "legionmatch_rolesignup",
@@ -1219,6 +1231,7 @@ export class XyzwWebSocketClient {
         "genie_sweep",
         "genie_buysweep",
         "system_signinreward",
+        "system_claimcdkreward",
         "dungeon_selecthero",
         "artifact_exchange",
         "hero_exchange",
